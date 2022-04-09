@@ -57,14 +57,14 @@ except FileNotFoundError:
 dest.write(cont0)
 
 def ranged_get(ti,start,end,l):
-	cnt=l//1024
+	cnt=l//4096
 	global _ua,url,gots,writing
 	head={
 		'User-Agent':_ua,
 	}
 	for i in range(cnt):
-		s=start+i*1024
-		e=s+1023
+		s=start+i*4096
+		e=s+4095
 		head['Range']='bytes='+str(s)+'-'+str(e)
 		#print(s,e)
 		resp=rq.get(url,headers=head)
@@ -74,9 +74,8 @@ def ranged_get(ti,start,end,l):
 		dest.seek(s)
 		dest.write(cont)
 		writing.release()
-		#print('%d %d'%(ti,i),end='\r')
-		gots[ti]=i
-	gots[ti]=-1
+		#print('%d %d'%(ti,i))
+		gots[ti]=i+1
 
 def ranged_get_run(ti):
 	global avg,tcnt
@@ -85,19 +84,57 @@ def ranged_get_run(ti):
 	ranged_get(ti,start,end,end-start)
 	if ti==tcnt-1:
 		global lst
-		ranged_get(ti,end,end+lst,lst)
+		if lst>0:
+			s=end
+			e=end+lst
+			head['Range']='bytes='+str(s)+'-'+str(e)
+			#print(s,e)
+			resp=rq.get(url,headers=head)
+			#print(resp.status_code)
+			cont=resp.content
+			writing.acquire()
+			dest.seek(s)
+			dest.write(cont)
+			writing.release()
+	global fin
+	fin[ti]=True
 
-avg=sz//tcnt
-lst=sz%tcnt
+psz=sz//4096*4096	# page-aligned size
+avg=psz//tcnt		# average size per thread
+lst=sz-psz			# last size
+all=psz//4096		# total pages
 gots=[0]*tcnt
+fin=[False]*tcnt
 writing=threading.Lock()
 a=time.time()
 for i in range(tcnt):
 	t=threading.Thread(target=ranged_get_run,args=(i,))
 	t.start()
-while gots.count(-1)!=tcnt:
-	print(gots,end='  \r')
+
+def putsz(n,a,s):
+	nd='K'
+	ad='K'
+	sd='K/s'
+	lft=a-n
+	est=round(lft/s,3)
+	if n>1536:
+		n=round(n/1024,3)
+		nd='M'
+	if a>1536:
+		a=round(a/1024,3)
+		ad='M'
+	if s>1536:
+		s=round(s/1024,3)
+		ad='M/s'
+	print(n,nd,'/',a,ad,';',s,sd,'eta',est,'s',end='  \r')
+
+ts=te=spd=0
+while fin.count(False)>0:
+	ts=te
 	time.sleep(1)
+	te=sum(gots)
+	spd=(te-ts)*4
+	putsz(te*4,all*4,spd)
 b=time.time()
-print(gots)
-print('Time:',b-a)
+putsz(te*4,all*4,spd)
+print('\nTime:',round(b-a,3),'s')
